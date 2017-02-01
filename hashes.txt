@@ -1,0 +1,16 @@
+# echo -n "the quick brown fox jumps over the lazy dog" | openssl dgst -md5 -hmac "aaaaa000"
+3d6ccac546f7f3b88d82937b65d0a4c5
+#
+# ???
+2ee28c0e34b220d84172bb79e28ffbe8
+#
+# ???
+bcf208e5d0365b79e286caadac1a790d
+# echo -n "the quick brown fox jumps over the lazy dog" | openssl dgst -md5 -hmac "potat09?"
+78acecdcb0043ca9eb0903d944116937
+#
+# echo -n "the quick brown fox jumps over the lazy dog" | openssl dgst -md5 -hmac "ameri2>8"
+f92ff535fe03b45ff0a4d388ceba18af
+#
+# echo -n "the quick brown fox jumps over the lazy dog" | openssl dgst -md5 -hmac "abaaa000"
+d0456bb1cb23087cf07f97f9a71dd074
