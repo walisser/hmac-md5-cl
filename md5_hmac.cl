@@ -20,7 +20,6 @@ void md5_hmac(__global uchar* restrict results,
 {
     __constant const char* msg = HMAC_MSG;
 
-    // generate key space on the fly
     int gid = get_global_id(0);
     
     uint groupSize = get_local_size(0);
@@ -49,6 +48,7 @@ void md5_hmac(__global uchar* restrict results,
     __local uint* restrict counters = scratch; scratch += MASK_KEY_CHARS;
 #endif
 
+    // hmac padding blocks
 #if HMAC_USE_PRIVATE_MEM
     uint ipad[HMAC_BLOCK_INTS + HMAC_MSG_INTS] = {0};
     uint opad[HMAC_BLOCK_INTS + MD5_DIGEST_INTS] = {0};
@@ -80,6 +80,7 @@ void md5_hmac(__global uchar* restrict results,
     
     uint hash[4] = {0,0,0,0};
     
+    // zero result buffer
     for (int j = 0; j < groupSize; j++)
         results[j] = 0;
     
@@ -99,6 +100,15 @@ void md5_hmac(__global uchar* restrict results,
 
         md5_multiBlock(hash, opad, HMAC_BLOCK_CHARS+MD5_DIGEST_CHARS);
         
+        //
+        // Results reporting is tuned a bit..
+        // - Only test the first word of the hash (for speed),
+        //   the driver checks the full hash
+        //
+        // - When using loop multiplier, multiple results will map to the same
+        //   bucket. Since driver skips any bucket with 0 value, it only makes
+        //   more work for the driver when there is a match.
+        //
         for (int i = 0; i < numHashes; i++)
             if (hashes[i] == hash[0])
                 results[j >> LOOP_MULTIPLIER_BITS] = 1;
@@ -106,4 +116,3 @@ void md5_hmac(__global uchar* restrict results,
         nextMaskedKey(key, counters, mask);        
     }
 }
-
