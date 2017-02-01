@@ -38,8 +38,8 @@ It has been tested on Radeon HD6870 using GalliumCompute (Clover) driver, and al
 
 ## Configure
 1. Edit config.h
-  - set the salt value (HMAC_MSG)
-  - set the key generator mask (MASK_KEY_CHARS, MASK_KEY_MASK)
+  - set the salt value (HMAC_MSG, HMAC_MSG_CHARS)
+  - set the key generator charset (MASK_KEY_MASK, MASK_KEY_CHARS)
 
 2. Edit hashes.txt
   - add your hashes (hint: include a few known keys to validate)
@@ -61,7 +61,7 @@ hash.state contains the current position in the key sequence. To resume from thi
 0x151400000 aijth4Dc...aijtv01r: 26.84 Mkey/s [Wed Feb 1 20:13:31 2017] 19.47ms
 ```
 1. Current sequence index
-2. Range of hashes being tested
+2. Range of keys being tested
 3. Hash rate
 4. Estimated completion date
 5. Time to execute kernel (lower values allow GPU to do other useful things)
