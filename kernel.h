@@ -1,7 +1,7 @@
 
 // common header for kernels and C source
-#ifndef __CONSTANTS_H__
-#define __CONSTANTS_H__
+#ifndef __KERNEL_H__
+#define __KERNEL_H__
 
 #include "config.h"
 
