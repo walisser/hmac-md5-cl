@@ -16,9 +16,11 @@
 #define START_INDEX (0x0)
 
 // tuning: number of keys tested per iteration
+// this is also the buffer size (in bytes) tested by the CPU for
+// any matches. It may be optimal for this size to fit in CPU caches.
 #define GLOBAL_WORK_SIZE (512*1024)
 
-// tuning: of number of keys per work group, best value depends on gpu
+// tuning: number of keys per work group, best value depends on gpu
 #define LOCAL_WORK_SIZE  (64)
 
 // tuning: number of buffers to use for reading back results,
