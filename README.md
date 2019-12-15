@@ -1,17 +1,24 @@
 # hmac-md5-cl
-Experimental HMAC-MD5 brute-forcer in OpenCL. The salt value is fixed and the key value is brute forced (as an ascii text string). The HMAC algorithm follows the RFC version.
+Experimental <a href="https://en.wikipedia.org/wiki/HMAC">HMAC-MD5</a> brute-forcer in OpenCL. The salt/message value is fixed and the key value is brute forced (as an ascii text string). The HMAC algorithm follows the RFC 2104 version with 64-byte blocks (e.g. `openssl dgst -md5 -hmac <key>`, php hash_hmac()).
 
-It has the following features:
-- Multi-block MD5 hash in OpenCL (greater than 64 bytes salt/key supported)
-- Key generator in OpenCL with N-way character set support
+The purpose of this project is to study OpenCL. There are lots of tunable parameters to experimient with, and it's a bit more difficult than plain md5.
 
-The purpose of this project is to study OpenCL. It probably isn't useful in practice, though some parts of it may be. For example, I could not find any examples of multi-block md5 when I started this project.
 
-It has been tested on Radeon HD6870 using GalliumCompute (Clover) driver, and also on a pair of Radeon R295x2 (4 GPUs).
+Main features:
+- Multi-block MD5 (greater than 64 bytes salt/message supported)
+- Multi-GPU
+- Multi-forcer (tests multiple hmac-md5 hashes simultaenously, up to 255)
+- Lots of tunable parameters (see config.h)
 
-## Requirements
+Requirements:
 - OpenCL 1.1
 - Qt5
+
+Verified hardware:
+- Radeon 6870, GalliumCompute (Clover)
+- Radeon R295x2, AMD OpenCL
+- Nvidia 1050ti, NVidia OpenCL
+
 
 ## Compile
 ```bash
@@ -19,15 +26,18 @@ It has been tested on Radeon HD6870 using GalliumCompute (Clover) driver, and al
   make
 ```
 
-## Run Tests
-```bash
-# test key generator
-./hmac-md5 -testClKeygen
+## Testing
 
-# test md5
+If any of these fail, there is no point running the hmac forcer.
+
+```bash
+# let this run for a while and stop it
+./hmac-md5 -testKeygen
+
+# let run to completion
 ./hmac-md5 -testMd5
 
-# test md5 of key sequence
+# run this for a while
 ./hmac-md5 -testMd5KeyGen
 
 # run the brute forcer
@@ -36,10 +46,11 @@ It has been tested on Radeon HD6870 using GalliumCompute (Clover) driver, and al
 ./hmac-md5
 ```
 
-## Configure
+## Running
 1. Edit config.h
-  - set the salt value (HMAC_MSG, HMAC_MSG_CHARS)
+  - set the salt/plaintext value (HMAC_MSG, HMAC_MSG_CHARS)
   - set the key generator charset (MASK_KEY_MASK, MASK_KEY_CHARS)
+  - edit tunables
 
 2. Edit hashes.txt
   - add your hashes (hint: include a few known keys to validate)
@@ -52,16 +63,17 @@ It has been tested on Radeon HD6870 using GalliumCompute (Clover) driver, and al
 ./hmac-md5
 ```
 
-## State file
-hash.state contains the current position in the key sequence. To resume from this position, change START_INDEX in config.h and recompile.
+## Resuming
+You can stop hashing (Control-C, or gpu crash ;-), tune the parameters, and resume where you left off with `-resume` switch. Note this is only valid if the key sequence configuration hasn't changed.
 
 
 ## Status output
 ```bash
 0x151400000 aijth4Dc...aijtv01r: 26.84 Mkey/s [Wed Feb 1 20:13:31 2017] 19.47ms
 ```
-1. Current sequence index
+1. Current sequence index (saved to hash.state file)
 2. Range of keys being tested
 3. Hash rate
-4. Estimated completion date
+4. Estimated completion date/time
 5. Time to execute kernel (lower values allow GPU to do other useful things)
+

@@ -6,24 +6,21 @@ __kernel
 
 __attribute__((reqd_work_group_size(LOCAL_WORK_SIZE, 1, 1)))
 
-void md5_hmac(__global uchar* restrict results, 
+void md5_hmac(
+    __global uchar* results,
     ulong index,
-    __constant const struct CLString* restrict mask,
-    __constant const uint* restrict hashes,
+    __constant const struct CLString* mask,
+    __constant const uint* hashes,
     uint numHashes
-#if HMAC_USE_PRIVATE_MEM
-
-#else
-    ,__local uint* restrict scratch
+#if !HMAC_USE_PRIVATE_MEM
+    ,__local uint* scratch
 #endif   
     )
 {
     __constant const char* msg = HMAC_MSG;
 
-    int gid = get_global_id(0);
-    
-    uint groupSize = get_local_size(0);
-    uint groupOffset = gid*groupSize;
+    const uint groupSize = get_local_size(0);
+    uint groupOffset = get_global_id(0)*groupSize;
     
     index += groupOffset*LOOP_MULTIPLIER;
     results += groupOffset;
@@ -37,7 +34,9 @@ void md5_hmac(__global uchar* restrict results,
     localOffset += HMAC_SCRATCH_INTS;
 #endif
 
+#if !KEYGEN_USE_PRIVATE_MEM && !HMAC_USE_PRIVATE_MEM
     scratch = scratch + localOffset*get_local_id(0);
+#endif
 
     // key sequence counters
 #if KEYGEN_USE_PRIVATE_MEM
@@ -45,7 +44,7 @@ void md5_hmac(__global uchar* restrict results,
     uint counters[MASK_KEY_CHARS] = {0};
 #else
     __local uint* restrict key      = scratch; scratch += MASK_KEY_INTS;
-    __local uint* restrict counters = scratch; scratch += MASK_KEY_CHARS;
+    __local uint* restrict counters = scratch; scratch += MASK_COUNTER_INTS;
 #endif
 
     // hmac padding blocks
@@ -57,7 +56,7 @@ void md5_hmac(__global uchar* restrict results,
     __local uint* restrict opad = scratch; scratch += HMAC_BLOCK_INTS + MD5_DIGEST_INTS;
 #endif
     
-    // init constant data
+    // init buffers
     {
         #if HMAC_USE_PRIVATE_MEM
         char* restrict ptr = (char*)(ipad + HMAC_BLOCK_INTS);
@@ -78,7 +77,7 @@ void md5_hmac(__global uchar* restrict results,
     // init key
     maskedKey(key, counters, index, mask);
     
-    uint hash[4] = {0,0,0,0};
+    uint hash[4] = {0};
     
     // zero result buffer
     for (int j = 0; j < groupSize; j++)

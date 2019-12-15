@@ -9,7 +9,7 @@
 #define MAX_HASHES (255)
 
 #define MASK_KEY_INTS  ((MASK_KEY_CHARS+3)/4)
-
+#define MASK_COUNTER_INTS (MASK_KEY_CHARS)
 #define KEY_SCRATCH_INTS (MASK_KEY_INTS+MASK_KEY_CHARS)
 
 #define HMAC_MSG_INTS  ((HMAC_MSG_CHARS+3)/4)
@@ -30,5 +30,21 @@ struct CLString
     unsigned char len;
     char ch[CLSTRING_MAX_LEN];
 };
+
+
+// fake types for c compiler suppress warnings from c parser
+#ifndef __OPENCL_VERSION__
+#include "stdint.h"
+#define uchar uint8_t
+#define uint uint32_t
+#define ulong uint64_t
+#define __constant
+#define __global
+#define __local
+#define __kernel
+#define get_local_size(x) (32)
+#define get_global_id(x) (0)
+#endif
+
 
 #endif

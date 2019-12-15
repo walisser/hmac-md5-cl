@@ -16,11 +16,16 @@ public:
     size_t maxWorkGroupSize;
     cl_ulong maxBufferSize;
     cl_ulong maxLocalMem;
-    
+    cl_ulong maxConstantMem;
+    cl_ulong kernelGlobalWorkSize;
+    cl_ulong kernelWorkGroupSize;
+    cl_ulong kernelLocalMem;
+    cl_ulong kernelPrivateMem;
 
-		
+    bool isNvidia=false;
+
 private:
-    static void initGpuDevice(cl_device_id * device_id, cl_uint maxDevices=1);
+    static void initFirstPlatform(cl_device_type deviceTypes, cl_device_id * device_id, cl_uint maxDevices=1);
     static void createContext(cl_context * context, cl_device_id device_id);
     
 public:
@@ -47,7 +52,7 @@ public:
     void createKernelString(cl_kernel * kernel, const char * kernel_name,
                                         const char * code, size_t code_len);
        
-    void setOutputBuffer(unsigned buffer_size);
+    void setOutputBuffer(size_t buffer_size);
     
     void enqueueReadBuffer(cl_command_queue command_queue,
               cl_mem buffer, size_t buffer_size, void * ptr, bool wait=CL_TRUE);

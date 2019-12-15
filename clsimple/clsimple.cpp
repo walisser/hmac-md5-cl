@@ -19,10 +19,11 @@
 
 CLSimple::CLSimple(const char * kernel_name, int deviceIndex)
 {
-    int numDevices = deviceIndex+1;
-    cl_device_id devices[numDevices] = {nullptr};
-    
-   initGpuDevice(devices, numDevices);
+    const int numDevices = deviceIndex+1;
+    cl_device_id devices[numDevices];
+    memset(devices, 0, sizeof(devices));
+
+   initFirstPlatform(CL_DEVICE_TYPE_GPU, devices, numDevices);
    assert(devices[deviceIndex] != nullptr);
    this->device_id = devices[deviceIndex];
      
@@ -33,7 +34,8 @@ CLSimple::CLSimple(const char * kernel_name, int deviceIndex)
    clGetDeviceInfo(this->device_id, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(maxWorkGroupSize), &maxWorkGroupSize, NULL);
    clGetDeviceInfo(this->device_id, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof(maxBufferSize), &maxBufferSize, NULL);
    clGetDeviceInfo(this->device_id, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(maxLocalMem), &maxLocalMem, NULL);
-   
+   clGetDeviceInfo(this->device_id, CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE, sizeof(maxConstantMem), &maxConstantMem, NULL);
+
    printf("max workgroup size=%" PRIi64 "\n", maxWorkGroupSize);
    printf("max local mem     =%" PRIi64 "\n", maxLocalMem);
    printf("max buffer size   =%" PRIi64 "\n", maxBufferSize);
@@ -167,18 +169,18 @@ void CLSimple::enqueueNDRangeKernel(cl_command_queue command_queue,
 /*========== CONVENIENCE WRAPPERS=============================================*/
 /*============================================================================*/
 
-void CLSimple::initGpuDevice(cl_device_id * device_ids, cl_uint maxDevices)
+void CLSimple::initFirstPlatform(cl_device_type deviceTypes, cl_device_id * device_ids, cl_uint maxDevices)
 {
    cl_int error;
 
    cl_uint total_platforms;
-   cl_platform_id platform_id;
+   cl_platform_id platform_id[2];
 
    cl_uint total_gpu_devices;
 
    error = clGetPlatformIDs(
-                           1, /* Max number of platform IDs to return */
-                           &platform_id, /* Pointer to platform_id */
+                           2, /* Max number of platform IDs to return */
+                           platform_id, /* Pointer to platform_id */
                            &total_platforms); /* Total number of platforms
                                                * found on the system */
 
@@ -189,18 +191,25 @@ void CLSimple::initGpuDevice(cl_device_id * device_ids, cl_uint maxDevices)
 
    fprintf(stderr, "There are %u platforms.\n", total_platforms);
 
-   error = clGetDeviceIDs(platform_id,
-                          CL_DEVICE_TYPE_GPU,
-                          maxDevices,
-                          device_ids,
-                          &total_gpu_devices);
+   assert(total_platforms <= 2);
 
-   if (error != CL_SUCCESS) {
-      fprintf(stderr, "clGetDeviceIDs() failed: %s\n", CLUtil::errorString(error));
-      assert(0);
+   for (cl_uint i = 0; i < total_platforms; i++) {
+       cl_char name[255] = {0};
+       error = clGetPlatformInfo(platform_id[i], CL_PLATFORM_VENDOR, sizeof(name)-1, name, nullptr);
+
+       error = clGetDeviceIDs(platform_id[i],
+                              deviceTypes,
+                              maxDevices,
+                              device_ids,
+                              &total_gpu_devices);
+
+       if (error != CL_SUCCESS) {
+          fprintf(stderr, "platform %d [%s]: no devices: %s\n", int(i), name, CLUtil::errorString(error));
+          continue;
+       }
+
+       fprintf(stderr, "platform %d [%s]: with %u devices:\n", int(i), name, total_gpu_devices);
    }
-   
-   fprintf(stderr, "There are %u GPU devices.\n", total_gpu_devices);
 }
 
 void CLSimple::createKernel(cl_kernel * kernel, const char * kernel_name)
@@ -231,7 +240,7 @@ void CLSimple::createKernelString(cl_kernel * kernel, const char * kernel_name,
       assert(0);
    }
 
-   fprintf(stderr, "clCreateProgramWithSource() suceeded.\n");
+   fprintf(stderr, "clCreateProgramWithSource() succeeded.\n");
 
    /* Build program */
 
@@ -241,7 +250,7 @@ void CLSimple::createKernelString(cl_kernel * kernel, const char * kernel_name,
    //QString options=QString("-cl-fast-relaxed-math -cl-mad-enable -I %1")
    //    .arg(cwd);
 
-   const char* options = "-I /home/ghaxt/src/hash";
+   const char* options = "-I . " ; //"-cl-nv-verbose";
 
    error = clBuildProgram(program,
                           1, /* Number of devices */
@@ -251,7 +260,7 @@ void CLSimple::createKernelString(cl_kernel * kernel, const char * kernel_name,
                           NULL); /* user data for callback */
 
 
-   if (error != CL_SUCCESS) {
+   //if (error != CL_SUCCESS) {
       char build_str[10000];
       error = clGetProgramBuildInfo(program,
                                     this->device_id,
@@ -265,10 +274,10 @@ void CLSimple::createKernelString(cl_kernel * kernel, const char * kernel_name,
       } else {
          fprintf(stderr, "Build Log: \n%s\n\n", build_str);
       }
-      assert(0);
-   }
+    //  assert(0);
+   //}
 
-   fprintf(stderr, "clBuildProgram() suceeded.\n");
+   fprintf(stderr, "clBuildProgram() succeeded.\n");
 
    *kernel = clCreateKernel(program, kernel_name, &error);
 
@@ -277,10 +286,23 @@ void CLSimple::createKernelString(cl_kernel * kernel, const char * kernel_name,
       assert(0);
    }
 
-   //fprintf(stderr, "clCreateKernel() suceeded.\n");
+   (void)clGetKernelWorkGroupInfo(*kernel, this->device_id, CL_KERNEL_GLOBAL_WORK_SIZE,
+                                  sizeof(kernelGlobalWorkSize), &kernelGlobalWorkSize, nullptr);
+
+   (void)clGetKernelWorkGroupInfo(*kernel, this->device_id, CL_KERNEL_WORK_GROUP_SIZE,
+                                  sizeof(kernelWorkGroupSize), &kernelWorkGroupSize, nullptr);
+
+   (void)clGetKernelWorkGroupInfo(*kernel, this->device_id, CL_KERNEL_LOCAL_MEM_SIZE,
+                                  sizeof(kernelLocalMem), &kernelLocalMem, nullptr);
+
+   (void)clGetKernelWorkGroupInfo(*kernel, this->device_id, CL_KERNEL_PRIVATE_MEM_SIZE,
+                                  sizeof(kernelPrivateMem), &kernelPrivateMem, nullptr);
+
+   fprintf(stderr, "clCreateKernel(): max_global_work=%d max_work_group=%d local_mem=%d private_mem=%d\n",
+           int(kernelGlobalWorkSize), int(kernelWorkGroupSize), int(kernelLocalMem), int(kernelPrivateMem));
 }
 
-void CLSimple::setOutputBuffer(unsigned buffer_size)
+void CLSimple::setOutputBuffer(size_t buffer_size)
 {
     createBuffer(&this->out_buffer, CL_MEM_WRITE_ONLY, buffer_size);
                              

@@ -30,6 +30,7 @@ SOURCES += \
     main.cpp
 
 DISTFILES += \
+    README.md \
     hashes.txt \
     keygen.cl \
     md5_crack.cl \
