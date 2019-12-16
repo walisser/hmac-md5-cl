@@ -7,7 +7,7 @@ The purpose of this project is to study OpenCL. There are lots of tunable parame
 Main features:
 - Multi-block MD5 (greater than 64 bytes salt/message supported)
 - Multi-GPU
-- Multi-forcer (tests multiple hmac-md5 hashes simultaenously, up to 255)
+- Multi-forcer (tests multiple hmac-md5 hashes in parallel), up to 255)
 - Lots of tunable parameters (see config.h)
 
 Requirements:

@@ -73,7 +73,7 @@ void md5_hmac(
         for (int i = 0; i < HMAC_MSG_CHARS; ++i)
             msgBuf[i] = msg[i];
     }
-    
+
 #if LOOP_COUNT*LOOP_MULTIPLIER == 1
     singleKey(key, index, mask);
 #else
@@ -90,12 +90,12 @@ void md5_hmac(
         }
 
         md5_multiBlock(hash, ipad, HMAC_BLOCK_CHARS+HMAC_MSG_CHARS);
-        
+
         for (int i = 0; i < MD5_DIGEST_INTS; ++i)
             opad[i + HMAC_BLOCK_INTS] = hash[i];
 
         md5_multiBlock(hash, opad, HMAC_BLOCK_CHARS+MD5_DIGEST_CHARS);
-        
+
         //
         // - Only test the first word of the hash (for speed),
         //   the driver checks the full hash
