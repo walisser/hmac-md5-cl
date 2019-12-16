@@ -141,8 +141,8 @@ void md5_block(const uint W[16], uint v[4])
 	STEP(I, b, c, d, a, W[13], 0x4e0811a1, 21);
 	STEP(I, a, b, c, d, W[4], 0xf7537e82, 6);
 	STEP(I, d, a, b, c, W[11], 0xbd3af235, 10);
-	STEP(I, c, d, a, b, W[2], 0x2ad7d2bb, 15);
-	STEP(I, b, c, d, a, W[9], 0xeb86d391, 21);
+    STEP(I, c, d, a, b, W[2], 0x2ad7d2bb, 15);
+    STEP(I, b, c, d, a, W[9], 0xeb86d391, 21);
 
     v[0] += a;
     v[1] += b;
@@ -150,13 +150,13 @@ void md5_block(const uint W[16], uint v[4])
     v[3] += d;
 }
 
-void md5_multiBlock(uint hash[4], MD5_LOCAL const uint *key, const uint len)
+void md5_multiBlock(uint hash[4], MD5_LOCAL const uint *msg, const uint len)
 {
     // accept any size key
     uint i, j;
 	uint W[16];
 	
-	const uint keyLen = (len+3)/4;         // length of key in 32-bit ints
+    const uint msgLen = (len+3)/4;         // length of key in 32-bit ints
     const uint alignedLen = (len/64) * 16; // length of key in 32-bit ints, rounded to block size
     
     uint v[4];
@@ -169,14 +169,14 @@ void md5_multiBlock(uint hash[4], MD5_LOCAL const uint *key, const uint len)
     for (j = 0; j < alignedLen; j+=16)
     {
         for (i = 0; i < 16; i++)
-            W[i] = *key++;
+            W[i] = *msg++;
         
         md5_block(W, v);
     }
     
     // final block
-    for (i = 0; i < keyLen-alignedLen; i++)
-        W[i] = *key++;
+    for (i = 0; i < msgLen-alignedLen; i++)
+        W[i] = *msg++;
     
     // zero pad
     for (; i < 16; i++)

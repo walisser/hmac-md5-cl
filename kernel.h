@@ -9,8 +9,9 @@
 #define MAX_HASHES (255)
 
 #define MASK_KEY_INTS  ((MASK_KEY_CHARS+3)/4)
-#define MASK_COUNTER_INTS (MASK_KEY_CHARS)
-#define KEY_SCRATCH_INTS (MASK_KEY_INTS+MASK_KEY_CHARS)
+#define MASK_COUNTER_CHARS (MASK_KEY_CHARS)
+#define MASK_COUNTER_INTS (MASK_KEY_INTS)
+#define KEY_SCRATCH_INTS (MASK_KEY_INTS+MASK_COUNTER_INTS)
 
 #define HMAC_MSG_INTS  ((HMAC_MSG_CHARS+3)/4)
 #define HMAC_BLOCK_CHARS (64)
@@ -32,7 +33,7 @@ struct CLString
 };
 
 
-// fake types for c compiler suppress warnings from c parser
+// fake types for c++ editor to make some useful warnings in kernels
 #ifndef __OPENCL_VERSION__
 #include "stdint.h"
 #define uchar uint8_t
@@ -42,9 +43,8 @@ struct CLString
 #define __global
 #define __local
 #define __kernel
-#define get_local_size(x) (32)
-#define get_global_id(x) (0)
+#define get_local_size(x) (ulong(LOCAL_WORK_SIZE))
+#define get_global_id(x)  (ulong(0))
+#define get_local_id(x)   (ulong(0))
 #endif
-
-
 #endif

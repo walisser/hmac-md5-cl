@@ -1,7 +1,7 @@
 # hmac-md5-cl
 Experimental <a href="https://en.wikipedia.org/wiki/HMAC">HMAC-MD5</a> brute-forcer in OpenCL. The salt/message value is fixed and the key value is brute forced (as an ascii text string). The HMAC algorithm follows the RFC 2104 version with 64-byte blocks (e.g. `openssl dgst -md5 -hmac <key>`, php hash_hmac()).
 
-The purpose of this project is to study OpenCL. There are lots of tunable parameters to experimient with, and it's a bit more difficult than plain md5.
+The purpose of this project is to study OpenCL. There are lots of tunable parameters to experiment with, and it's a bit more difficult than plain md5.
 
 
 Main features:

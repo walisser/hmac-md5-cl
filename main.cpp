@@ -11,6 +11,7 @@
 #include <sys/time.h> // gettimeofday()
 
 #include <QtCore/QtCore>
+#include <QtConcurrent/QtConcurrent>
 
 #define swap32(num) \
         ((((num)>>24)&0xff) | \
@@ -18,12 +19,17 @@
         (((num)>>8)&0xff00) |  \
         (((num)<<24)&0xff000000))
 
+#define roundInt(x, y) (((x)/(y))*(y))
+
 typedef union {
     uchar byte[16];
     char  ch[16];
 } Hash;
 
-static const char* kMaskCharSets[MASK_KEY_CHARS] = MASK_KEY_MASK;
+
+static const char* kMaskCharSets[] = MASK_KEY_MASK;
+
+static_assert(sizeof(kMaskCharSets) == MASK_KEY_CHARS*sizeof(char*), "invalid mask array or length");
 
 static int hex2int(char ch)
 {
@@ -53,6 +59,7 @@ static void simpleKey(char* key, const int keyLen, uint64_t sequence, const char
         key[keyLen-i-1] = chars[digit];
     }
 }
+
 // convert array of charsets to array of CLString which also holds the string length
 // mask and charSets array length == keyLen
 // return number of permutations (size of key space, last sequence number+1)
@@ -91,9 +98,9 @@ static void maskedKey(char* key, uchar* counters, int keyLen, uint64_t sequence,
         const struct CLString* set = mask + i;
         uchar base = set->len;
         
-        uchar digit = sequence % base;
-        counters[i] = digit;
-        key[i] = set->ch[digit];
+        uchar maskIndex = sequence % base;
+        counters[i] = maskIndex;
+        key[i] = set->ch[maskIndex];
 
         sequence /= base;        
     }
@@ -104,13 +111,13 @@ static void maskedKey(char* key, uchar* counters, int keyLen, uint64_t sequence,
 // rest of the key unchanged. also elimnates modulus and divide operation.
 static void nextMaskedKey(char* key, uchar* counters, int keyLen, const struct CLString* mask)
 {
-    for (int i = keyLen-1; i>=0; i--)
+    for (int i = keyLen-1; i >= 0; --i)
     {
-        if (counters[i] < mask[i].len-1)
+        uchar maskIndex = counters[i]+1;
+        if (maskIndex < mask[i].len)
         {
-            uchar digit = counters[i] + 1;
-            counters[i] = digit;
-            key[i] = mask[i].ch[digit];
+            counters[i] = maskIndex;
+            key[i] = mask[i].ch[maskIndex];
             break;
         }
         else
@@ -244,12 +251,11 @@ static void testKeyGen()
     const size_t keyLenInts = (keyLen+3)/4;
     const size_t maxKeys = cl.maxBufferSize / (keyLenInts*4);
 
-    // localsize is limited by available localmem
-    // GPUs require multiples of 2?
-    // best local size is GPU/kernel-dependent
+    size_t localSize = LOCAL_WORK_SIZE; //cl.kernelWorkGroupSize; //cl.maxWorkGroupSize;
+#if KEYGEN_USE_PRIVATE_MEM
+    size_t localMemSize = 0;
+#else
     const size_t localStride = (KEY_SCRATCH_INTS+MASK_KEY_CHARS)*4;
-
-    size_t localSize = cl.kernelWorkGroupSize; //cl.maxWorkGroupSize;
     size_t localMemSize = localStride*localSize;
     while (localMemSize > (cl.maxLocalMem-cl.kernelLocalMem))
     {
@@ -257,23 +263,18 @@ static void testKeyGen()
         localMemSize = localStride*localSize;
     }
     assert(localMemSize <= (cl.maxLocalMem-cl.kernelLocalMem));
-#if !KEYGEN_USE_PRIVATE_MEM
     cl.kernelSetArg(cl.kernel, 3, localMemSize, nullptr);
 #endif
 
-    // globalSize is rounded to the workgroup size so it
-    // can be divided again for iterations
-    size_t globalSize = (maxKeys / localSize) * localSize;
+    // globalSize is rounded to so it can be divided again for iterations and local work groups
+    size_t globalSize = roundInt(maxKeys, localSize*LOOP_COUNT);
 
     // number of keys per iteration/enqueued kernel, limited by
     // how many strings we can store in a buffer
     const size_t numKeys = globalSize;
-    
-    // divide again since each compute unit will do get_local_size() iterations
-    // hence, globalSize is not actually the number of work items,
-    // and localSize is also the "stride" between cu's
-    assert(globalSize % localSize == 0);
-    globalSize /= localSize;
+
+    // divide again since each work item will do LOOP_COUNT iterations
+    globalSize /= LOOP_COUNT;
 
     const size_t outSize = sizeof(cl_uint)*keyLenInts*numKeys;
     cl_uint* out = new cl_uint[keyLenInts*numKeys];
@@ -293,7 +294,7 @@ static void testKeyGen()
     printf("globalWorkSize=%lu localWorkSize=%lu outMemSize=%lu inMemSize=%lu localMem=%lu\n",
         globalSize, localSize, outSize, size_t(0), localMemSize);
 
-    assert(globalSize*localSize == numKeys);
+    assert(globalSize*LOOP_COUNT == numKeys);
     assert(globalSize > localSize);
     assert(globalSize % localSize == 0);
 
@@ -302,9 +303,6 @@ static void testKeyGen()
         uchar counters[keyLen] = {0};
         char tmp[keyLen+1] = {0};
         maskedKey(tmp, counters, keyLen, index, mask);
-
-        printf("%s\r", tmp);
-        fflush(stdout);
 
         cl.kernelSetArg(cl.kernel, 1, sizeof(index), &index);
         cl.enqueueNDRangeKernel(cl.command_queue, cl.kernel, 1, &globalSize, &localSize);
@@ -319,15 +317,15 @@ static void testKeyGen()
             (index*100.0)/keySpace
             );
         t0=t1;
+        fflush(stdout);
 
-        memset(out, 0, outSize);
         cl.readOutput(out, outSize);
 
         // verify the result
         for (size_t i = 0; i < numKeys; i++)
         {
             char* key = reinterpret_cast<char*>(out + i * keyLenInts);
-
+            //printf("%d: %s\n", int(i), tmp);
             if (memcmp(key, tmp, keyLen) != 0)
             {
                 printf("ERROR @ %d: got: ", int(i));
@@ -349,8 +347,12 @@ static void testMd5()
 
     const size_t maxSize = cl.maxBufferSize / sizeof(CLString);
 
+    size_t localSize = LOCAL_WORK_SIZE; //cl.kernelWorkGroupSize; //cl.maxWorkGroupSize;
+
+#if MD5_USE_PRIVATE_MEM
+    size_t localMemSize = 0;
+#else
     const size_t localStride = sizeof(CLString);
-    size_t localSize = cl.kernelWorkGroupSize; //cl.maxWorkGroupSize;
     size_t localMemSize = localStride*localSize;
     while (localMemSize > (cl.maxLocalMem-cl.kernelLocalMem))
     {
@@ -358,9 +360,11 @@ static void testMd5()
         localMemSize = localStride*localSize;
     }
     assert(localMemSize <= (cl.maxLocalMem-cl.kernelLocalMem));
+    cl.kernelSetArg(cl.kernel, 2, localMemSize, nullptr);
+#endif
 
-    size_t globalSize = (maxSize / localSize) * localSize;
-    globalSize = qMin(size_t(localSize*2), globalSize);
+    size_t globalSize = roundInt(maxSize, localSize);
+    //globalSize = qMin(size_t(localSize*2), globalSize);
     const size_t numMsgs = globalSize;
 
     Hash* hashes = new Hash[numMsgs];
@@ -372,14 +376,15 @@ static void testMd5()
     cl_mem msgBuffer;
     const size_t msgSize = sizeof(CLString)*numMsgs;
 
-    //assert(msgSize <= cl.maxConstantMem);
     assert(msgSize <= cl.maxBufferSize);
     cl.createBuffer(&msgBuffer, CL_MEM_READ_WRITE, msgSize);
     cl.kernelSetArg(cl.kernel, 1, sizeof(msgBuffer), &msgBuffer);
-    cl.kernelSetArg(cl.kernel, 2, localMemSize, nullptr);
 
     printf("globalWorkSize=%lu localWorkSize=%lu outMemSize=%lu inMemSize=%lu localMem=%lu\n",
         globalSize, localSize, hashesSize, msgSize, localMemSize);
+
+    QVector<QFuture<int>> work;
+    QMutex stdioMutex;
 
     for (int msgLen = 1; msgLen <= 255; msgLen++)
     {
@@ -397,26 +402,39 @@ static void testMd5()
             cl.enqueueNDRangeKernel(cl.command_queue, cl.kernel, 1, &globalSize, &localSize);
             cl.readOutput(hashes, hashesSize);
 
-            for (size_t i = 0; i < numMsgs; i++)
+            for (size_t i = 0; i < numMsgs; i+=64*1024)
             {
-                QByteArray msgBytes(msgs[i].ch, msgs[i].len);
+                work.append(QtConcurrent::run([&,i]() {
 
-                if (QByteArray(hashes[i].ch, 16) != QCryptographicHash::hash(msgBytes, QCryptographicHash::Md5))
-                {
-                    printf("%s: ", msgs[i].ch);
-                    for (int j = 0; j < 16; j++)
-                        printf("%.2x", hashes[i].byte[j]);
+                    const size_t j = qMin(i+64*1024, numMsgs);
+                    for (size_t k = i; k < j; ++k)
+                    {
+                        QByteArray msgBytes(msgs[k].ch, msgs[k].len);
 
-                    printf("   ..error");
-                    printf("\n\n");
-                }
+                        if (QByteArray(hashes[k].ch, 16) != QCryptographicHash::hash(msgBytes, QCryptographicHash::Md5))
+                        {
+                            QMutexLocker lock(&stdioMutex);
+                            printf("\nerror @ len=%d %s : ", msgs[k].len, qPrintable(QString(msgBytes)));
+                            for (int l = 0; l < 16; ++l)
+                                printf("%.2x", hashes[k].byte[l]);
+
+                            printf("\n");
+                        }
+                    }
+                    return 0;
+                }));
             }
+            for (auto& w : work)
+                w.waitForFinished();
 
-            printf("msglen=%d %.2d%% hashes OK\r", int(msgLen), int( (seq+numMsgs)*100/(numMsgs*4)));
+            printf("msglen=%d %.2d%% of %dk hashes OK   \r",
+                   int(msgLen),
+                   int((seq+numMsgs)*100/(numMsgs*4)),
+                   int(numMsgs/1024));
             fflush(stdout);
         }
-        printf("\n");
     }
+    printf("\n");
 }
 
 // test OpenCL md5(key)
@@ -433,8 +451,12 @@ static void testMd5KeyGen()
     
     const int keyLen = MASK_KEY_CHARS;
 
+    size_t localSize = LOCAL_WORK_SIZE;//cl.kernelWorkGroupSize; //cl.maxWorkGroupSize;
+
+#if KEYGEN_USE_PRIVATE_MEM
+    size_t localMemSize = 0;
+#else
     const size_t localStride = (MASK_KEY_INTS+MASK_COUNTER_INTS)*4;
-    size_t localSize = cl.kernelWorkGroupSize; //cl.maxWorkGroupSize;
     size_t localMemSize = localStride*localSize;
     while (localMemSize > (cl.maxLocalMem-cl.kernelLocalMem))
     {
@@ -443,13 +465,14 @@ static void testMd5KeyGen()
     }
     assert(localMemSize <= (cl.maxLocalMem-cl.kernelLocalMem));
     cl.kernelSetArg(cl.kernel, 3, localMemSize, nullptr);
+#endif
 
     // largest buffer will be hashes, 16 bytes per.
     const size_t maxHashes = cl.maxBufferSize / 16;
     
-    size_t globalSize = (maxHashes/localSize)*localSize;
+    size_t globalSize = roundInt(maxHashes, localSize*LOOP_COUNT);
     const size_t numHashes = globalSize;
-    globalSize /= localSize;
+    globalSize /= LOOP_COUNT;
 
     assert(globalSize > localSize);
     assert(globalSize % localSize == 0);
@@ -562,11 +585,13 @@ static void hmacMd5Search(const size_t startingIndex)
 
     const size_t maxKeys   = GLOBAL_WORK_SIZE; //cl.maxBufferSize;
     const size_t localSize = LOCAL_WORK_SIZE;  //cl.maxWorkGroupSize;
-    size_t globalSize = (maxKeys / localSize) * localSize;
+    size_t globalSize = roundInt(maxKeys, localSize*LOOP_COUNT);
     size_t numKeys = globalSize;
 
     // needs to be multiple of 8 due to optimized results check
     assert(numKeys % 8 == 0);
+
+    globalSize /= LOOP_COUNT;
 
     const size_t maskSize = sizeof(CLString) * keyLen;
     CLString* mask = new CLString[keyLen];
@@ -594,6 +619,7 @@ static void hmacMd5Search(const size_t startingIndex)
     }
 
     // the hmac plaintext is a constant in config.h
+    printf("target message = \"%s\" len=%d\n", HMAC_MSG, int(strlen(HMAC_MSG)));
     assert(strlen(HMAC_MSG) == HMAC_MSG_CHARS);
 
     // load the target hashes
@@ -602,7 +628,7 @@ static void hmacMd5Search(const size_t startingIndex)
 
     for (size_t i = 0; i < numHashes; i++)
     {
-        printf("loading hash %d: %s\n", int(i), strHashes[i]);
+        printf("target hash %d: %s\n", int(i), strHashes[i]);
         uint32_t word = 0;
         for (int j = 0; j < 8; j++)
         {
@@ -615,7 +641,6 @@ static void hmacMd5Search(const size_t startingIndex)
     for (int i = 0; i < NUM_GPUS; i++)
         gpus[i].cl->createBuffer(&(gpus[i].hashBuffer), CL_MEM_READ_ONLY, hashSize);
 
-    globalSize /= localSize;
     assert(globalSize > localSize);
     assert(globalSize % localSize == 0);
 
@@ -632,7 +657,7 @@ static void hmacMd5Search(const size_t startingIndex)
 
     const size_t localMemSize = localStride*localSize;
 
-    // output one byte per hash, a mask of the hashes that matched
+    // output one byte per hash, if loop multiplier enabled, output LOOP_MULTIPLER hashes per byte
     size_t outSize = numKeys;
 
     printf("globalSize=%lu localSize=%lu localMem=%lu outSize=%lu keySpace=%g keys/iteration=%dk\n",
@@ -673,6 +698,8 @@ static void hmacMd5Search(const size_t startingIndex)
     int prevIndex = 1;
     int currIndex = 0;
 
+    uint64_t worstVerify = 0;
+
     uint64_t p0, p1;
     p0 = nanoTime();
 
@@ -708,11 +735,12 @@ static void hmacMd5Search(const size_t startingIndex)
             QDateTime time = QDateTime::currentDateTime();
             time = time.addMSecs(qint64(t));
 
-            printf("%s: %.2f Mkey/s [%s] %.2fms",
+            printf("%s: %.2f Mkey/s [%s] kernel=%.2fms verify=%.2fms          ",
                     key,
                     loops*numKeys*NUM_GPUS*LOOP_MULTIPLIER * 1000.0 / (p1 - p0),
                     qPrintable(time.toString()),
-                    (t1 - t0) / 1000000.0);
+                    (t1 - t0) / 1000000.0,
+                    worstVerify / 1000000.0);
             fflush(stdout);
      
             t1 = nanoTime();
@@ -727,15 +755,17 @@ static void hmacMd5Search(const size_t startingIndex)
         {
             auto gpu = gpus+g;
             
-            // wait for kernel completion
+            // the finish/flush is required since we are going to
+            // read from the buffer that just finished
             clFinish(gpu->cl->command_queue);
         
             // queue the next group
             gpu->cl->kernelSetArg(gpu->cl->kernel, 0, sizeof(cl_mem), &(gpu->pinBuffer[currIndex]));
             gpu->cl->kernelSetArg(gpu->cl->kernel, 1, sizeof(index), &index);
-            gpu->cl->enqueueNDRangeKernel(gpu->cl->command_queue, gpu->cl->kernel, 1, &globalSize,
-                    &localSize, false);
-            clFlush(gpu->cl->command_queue);
+            gpu->cl->enqueueNDRangeKernel(gpu->cl->command_queue, gpu->cl->kernel, 1, &globalSize, &localSize, false);
+
+            // this doesn't seem to be necessary
+            //clFlush(gpu->cl->command_queue);
             
             // get pointer to the finished kernel's output
             uint64_t* out = static_cast<uint64_t*>(clEnqueueMapBuffer(gpu->outQueue,
@@ -743,58 +773,61 @@ static void hmacMd5Search(const size_t startingIndex)
                 CL_TRUE, 0, outSize, 0, nullptr, nullptr, nullptr));
 
             assert(out);
-            //clFlush(gpu->outQueue);
 
-            // wait for read completion, not needed since we used CL_TRUE in the map
-            // note: should be faster to wait? but performance dropoff was huge
+            // wait should not be needed since we used CL_TRUE in the map
             //clFinish(gpu->outQueue);
 
             // check the output, 8 bytes at a time
             
-            // skip first buffers, there is nothing in them since
-            // we haven't returned from the first loop yet.
+            uint64_t v0 = nanoTime();
+
+            // skip first buffer(s), there is nothing in them since
+            // we haven't returned from the first iteration yet.
             if (index >= startingIndex + numKeys*LOOP_MULTIPLIER*NUM_GPUS)
             for (size_t k = 0; k < numKeys / 8; k++)
             {
                 uint64_t tmp = out[k];
                 if (tmp)
                 {
-                    // maybe match: check each byte flag, one per group
+                    // maybe match: check each byte of the uint64
                     // kernel only compares the first 4 bytes of the hash (for speed),
                     // so there will be false positives
-                    for (size_t i = 0; i < 8; i++)
+                    for (size_t i = 0; i < sizeof(tmp); i++)
                     {
                         uchar byte = tmp & 0xff;
                         tmp >>= 8;
                         if (byte)
                         {
-                            // each byte represents up to 8 possible keys, so we have
-                            // 8*n checks to find which hashes matched
+                            // each byte represents LOOP_MULTIPLIER possible keys
                             for (int n = 0; n < LOOP_MULTIPLIER; n++)
                             {
                                 maskedKey(key, counters, keyLen,
-                                        index + k*(LOOP_MULTIPLIER*8) + i*(LOOP_MULTIPLIER) + n - numKeys*NUM_GPUS*LOOP_MULTIPLIER, mask);
+                                        index +
+                                            k*(LOOP_MULTIPLIER*sizeof(tmp)) +     // 8*N keys per uint64
+                                            i*LOOP_MULTIPLIER +                   // offset in the uint64
+                                            n -                                   // which of the N keys
+                                            numKeys*NUM_GPUS*LOOP_MULTIPLIER,     // index is ahead of us by this amount (same as skip amount above)
+                                          mask);
 
-                                QByteArray a = hmacMd5(QByteArray(key, keyLen), QByteArray(HMAC_MSG, HMAC_MSG_CHARS));
+                                const QByteArray a = hmacMd5(QByteArray(key, keyLen), QByteArray(HMAC_MSG, HMAC_MSG_CHARS));
 
                                 // find the hash that matches
                                 for (size_t j = 0; j < numHashes; j++)
-                                    //if (flag & (1 << j))
-                                    {
-                                        QByteArray b = QByteArray::fromHex(strHashes[j]);
-
-                                        if (a == b)
-                                            printf("\r%s:%s                                                              \n",
-                                                   strHashes[j], key);
-                                    }
-                                
+                                {
+                                    const QByteArray b = QByteArray::fromHex(strHashes[j]);
+                                    if (a == b)
+                                        printf("\r%s:%s                                                              \n",
+                                               strHashes[j], key);
+                                }
                             }  
                         }
                     }
                 }
             }
-
             
+            uint64_t v1 = nanoTime();
+            worstVerify = qMax(worstVerify, v1-v0);
+
             index += numKeys*LOOP_MULTIPLIER;
 
             clEnqueueUnmapMemObject(gpu->outQueue, gpu->pinBuffer[mappedIndex], out,

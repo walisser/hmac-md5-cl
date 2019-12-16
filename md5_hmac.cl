@@ -2,29 +2,28 @@
 #include "keygen.cl"
 #include "md5.cl"
 
-__kernel 
-
-__attribute__((reqd_work_group_size(LOCAL_WORK_SIZE, 1, 1)))
-
+__kernel
 void md5_hmac(
     __global uchar* results,
     ulong index,
     __constant const struct CLString* mask,
     __constant const uint* hashes,
-    uint numHashes
+    const uint numHashes
 #if !HMAC_USE_PRIVATE_MEM
     ,__local uint* scratch
 #endif   
     )
 {
-    __constant const char* msg = HMAC_MSG;
+    uint outOffset = get_global_id(0)*LOOP_COUNT;
 
-    const uint groupSize = get_local_size(0);
-    uint groupOffset = get_global_id(0)*groupSize;
+    index += outOffset*LOOP_MULTIPLIER;
+    results += outOffset;
     
-    index += groupOffset*LOOP_MULTIPLIER;
-    results += groupOffset;
-    
+    // zero result buffer, only touch it again
+    // if there is a match
+    for (uint j = 0; j < LOOP_COUNT; j++)
+        results[j] = 0;
+
     int localOffset = 0;
 #if !KEYGEN_USE_PRIVATE_MEM
     localOffset += KEY_SCRATCH_INTS;
@@ -40,78 +39,76 @@ void md5_hmac(
 
     // key sequence counters
 #if KEYGEN_USE_PRIVATE_MEM
-    uint key[MASK_KEY_INTS] = {0};
-    uint counters[MASK_KEY_CHARS] = {0};
+    uint key[MASK_KEY_INTS];
+    uchar counters[MASK_KEY_CHARS];
 #else
-    __local uint* restrict key      = scratch; scratch += MASK_KEY_INTS;
-    __local uint* restrict counters = scratch; scratch += MASK_COUNTER_INTS;
+    __local uint*  __restrict key      = scratch;                 scratch += MASK_KEY_INTS;
+    __local uchar* __restrict counters = (__local uchar*)scratch; scratch += MASK_COUNTER_INTS;
 #endif
 
     // hmac padding blocks
 #if HMAC_USE_PRIVATE_MEM
-    uint ipad[HMAC_BLOCK_INTS + HMAC_MSG_INTS] = {0};
-    uint opad[HMAC_BLOCK_INTS + MD5_DIGEST_INTS] = {0};
+    uint ipad[HMAC_BLOCK_INTS + HMAC_MSG_INTS];
+    uint opad[HMAC_BLOCK_INTS + MD5_DIGEST_INTS];
 #else
-    __local uint* restrict ipad = scratch; scratch += HMAC_BLOCK_INTS + HMAC_MSG_INTS;
-    __local uint* restrict opad = scratch; scratch += HMAC_BLOCK_INTS + MD5_DIGEST_INTS;
+    __local uint* __restrict ipad = scratch; scratch += HMAC_BLOCK_INTS + HMAC_MSG_INTS;
+    __local uint* __restrict opad = scratch; scratch += HMAC_BLOCK_INTS + MD5_DIGEST_INTS;
 #endif
     
-    // init buffers
+    for (int i = 0; i < HMAC_BLOCK_INTS; ++i)
     {
-        #if HMAC_USE_PRIVATE_MEM
-        char* restrict ptr = (char*)(ipad + HMAC_BLOCK_INTS);
-        #else
-        __local char* restrict ptr = (__local char*)(ipad + HMAC_BLOCK_INTS);
-        #endif
+        ipad[i] = 0x36363636;
+        opad[i] = 0x5c5c5c5c;
+    }
 
-        for (int i = 0; i < HMAC_BLOCK_INTS; i++)
-        {
-            ipad[i] = 0x36363636;
-            opad[i] = 0x5c5c5c5c;
-        }
-        
-        for (int i = 0; i < HMAC_MSG_CHARS; i++)
-            ptr[i] = msg[i];
+    // append message to input pad
+    {
+        __constant const char* msg = HMAC_MSG;
+
+#if HMAC_USE_PRIVATE_MEM
+        char* msgBuf = (char*)(ipad + HMAC_BLOCK_INTS);
+#else
+        __local char* msgBuf = (__local char*)(ipad + HMAC_BLOCK_INTS);
+#endif
+        for (int i = 0; i < HMAC_MSG_CHARS; ++i)
+            msgBuf[i] = msg[i];
     }
     
-    // init key
+#if LOOP_COUNT*LOOP_MULTIPLIER == 1
+    singleKey(key, index, mask);
+#else
     maskedKey(key, counters, index, mask);
-    
-    uint hash[4] = {0};
-    
-    // zero result buffer
-    for (int j = 0; j < groupSize; j++)
-        results[j] = 0;
-    
-    for (int j = 0; j < groupSize*LOOP_MULTIPLIER; j++)
+#endif
+
+    uint hash[4];
+    for (uint j = 0; j < LOOP_COUNT*LOOP_MULTIPLIER; ++j)
     {
-        // copy key into pad
-        for (int i = 0; i < MASK_KEY_INTS; i++)
+        for (int i = 0; i < MASK_KEY_INTS; ++i)
         {
             ipad[i] = 0x36363636 ^ key[i];
             opad[i] = 0x5c5c5c5c ^ key[i];
         }
-        
+
         md5_multiBlock(hash, ipad, HMAC_BLOCK_CHARS+HMAC_MSG_CHARS);
         
-        for (int i = 0; i < MD5_DIGEST_INTS; i++)
+        for (int i = 0; i < MD5_DIGEST_INTS; ++i)
             opad[i + HMAC_BLOCK_INTS] = hash[i];
 
         md5_multiBlock(hash, opad, HMAC_BLOCK_CHARS+MD5_DIGEST_CHARS);
         
         //
-        // Results reporting is tuned a bit..
         // - Only test the first word of the hash (for speed),
         //   the driver checks the full hash
         //
         // - When using loop multiplier, multiple results will map to the same
-        //   bucket. Since driver skips any bucket with 0 value, it only makes
-        //   more work for the driver when there is a match.
+        //   byte, the driver checks all possible keys that could have matched
         //
-        for (int i = 0; i < numHashes; i++)
+        for (uint i = 0; i < numHashes; ++i)
             if (hashes[i] == hash[0])
                 results[j >> LOOP_MULTIPLIER_BITS] = 1;
-        
-        nextMaskedKey(key, counters, mask);        
+
+#if LOOP_COUNT*LOOP_MULTIPLIER > 1
+        nextMaskedKey(key, counters, mask);
+#endif
     }
 }

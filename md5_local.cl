@@ -2,9 +2,11 @@
 #include "md5.cl"
 
 __kernel void md5_local(__global uint *hashes,
-     __global const struct CLString* msgs,
-    __local uint* scratch
-    )
+     __global const struct CLString* msgs
+#if !MD5_USE_PRIVATE_MEM
+    , __local uint* scratch // temporary for key gen
+#endif
+)
 {
     uint gid = get_global_id(0);
     msgs += gid;

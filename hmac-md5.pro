@@ -33,7 +33,6 @@ DISTFILES += \
     README.md \
     hashes.txt \
     keygen.cl \
-    md5_crack.cl \
     md5_hmac.cl \
     md5_keys.cl \
     md5.cl \
